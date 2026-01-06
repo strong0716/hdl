@@ -375,3 +375,54 @@ ad_connect sys_cpu_resetn axi_ad9361_dac_dma/m_src_axi_aresetn
 ad_cpu_interrupt ps-13 mb-13 axi_ad9361_adc_dma/irq
 ad_cpu_interrupt ps-12 mb-12 axi_ad9361_dac_dma/irq
 
+# =============================================================================
+# ILA Debug Core - 階段一：觀察官方數據流
+# =============================================================================
+
+puts "Adding ILA Debug Core..."
+
+# 使用標準 ILA，時鐘使用 l_clk
+# 重要: 需要從 SD 卡啟動後（AD9361 初始化），l_clk 才會活動
+#       然後再用 JTAG 連接 ILA
+
+ad_ip_instance ila ila_rf_debug
+ad_ip_parameter ila_rf_debug CONFIG.C_MONITOR_TYPE Native
+ad_ip_parameter ila_rf_debug CONFIG.C_NUM_OF_PROBES 10
+ad_ip_parameter ila_rf_debug CONFIG.C_DATA_DEPTH 4096
+ad_ip_parameter ila_rf_debug CONFIG.C_EN_STRG_QUAL 1
+ad_ip_parameter ila_rf_debug CONFIG.C_ADV_TRIGGER true
+ad_ip_parameter ila_rf_debug CONFIG.ALL_PROBE_SAME_MU_CNT 2
+
+# Probe 寬度
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE0_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE1_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE2_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE3_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE4_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE5_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE6_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE7_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE8_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE9_WIDTH 1
+
+# 時脈 - l_clk (從 AD9361)
+ad_connect axi_ad9361/l_clk ila_rf_debug/clk
+
+# TX 路徑
+ad_connect tx_upack/fifo_rd_data_0 ila_rf_debug/probe0
+ad_connect tx_upack/fifo_rd_data_1 ila_rf_debug/probe1
+ad_connect tx_fir_interpolator/data_out_0 ila_rf_debug/probe2
+ad_connect tx_fir_interpolator/data_out_1 ila_rf_debug/probe3
+
+# RX 路徑
+ad_connect axi_ad9361/adc_data_i0 ila_rf_debug/probe4
+ad_connect axi_ad9361/adc_data_q0 ila_rf_debug/probe5
+ad_connect rx_fir_decimator/data_out_0 ila_rf_debug/probe6
+ad_connect rx_fir_decimator/data_out_1 ila_rf_debug/probe7
+
+# 控制信號
+ad_connect tx_fir_interpolator/valid_out_0 ila_rf_debug/probe8
+ad_connect rx_fir_decimator/valid_out_0 ila_rf_debug/probe9
+
+puts "ILA added: 10 probes, 4096 depth, l_clk"
+
