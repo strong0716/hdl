@@ -474,7 +474,7 @@ puts "Adding ILA Debug Core..."
 
 ad_ip_instance ila ila_rf_debug
 ad_ip_parameter ila_rf_debug CONFIG.C_MONITOR_TYPE Native
-ad_ip_parameter ila_rf_debug CONFIG.C_NUM_OF_PROBES 12
+ad_ip_parameter ila_rf_debug CONFIG.C_NUM_OF_PROBES 26
 ad_ip_parameter ila_rf_debug CONFIG.C_DATA_DEPTH 4096
 ad_ip_parameter ila_rf_debug CONFIG.C_EN_STRG_QUAL 1
 ad_ip_parameter ila_rf_debug CONFIG.C_ADV_TRIGGER true
@@ -493,6 +493,24 @@ ad_ip_parameter ila_rf_debug CONFIG.C_PROBE8_WIDTH 1
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE9_WIDTH 1
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE10_WIDTH 4
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE11_WIDTH 1
+# DMA 路徑監控
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE12_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE13_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE14_WIDTH 16
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE15_WIDTH 16
+# AXI Stream Debug (Stage 3+)
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE16_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE17_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE18_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE19_WIDTH 1
+# DMA/Reset Debug (Stage 3+ Extended)
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE20_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE21_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE22_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE23_WIDTH 1
+# DMA 內部狀態 (Stage 3++ Deep Debug)
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE24_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE25_WIDTH 16
 
 # 時脈 - l_clk (從 AD9361)
 ad_connect axi_ad9361/l_clk ila_rf_debug/clk
@@ -529,5 +547,48 @@ ad_connect rx_passthrough/probe_valid ila_rf_debug/probe9
 ad_connect tx_bpsk_mod/probe_bit_cnt ila_rf_debug/probe10
 ad_connect tx_bpsk_mod/probe_current_bit ila_rf_debug/probe11
 
-puts "ILA added: 12 probes, 4096 depth, l_clk (Stage 3 BPSK)"
+# DMA 路徑監控 (Stage 3 Debug)
+# probe12: tx_upack fifo_rd_en - FIFO 讀取使能
+# probe13: tx_upack fifo_rd_underflow - FIFO 下溢
+# probe14: tx_upack fifo_rd_data_0 - FIFO 資料輸出 I
+# probe15: tx_upack fifo_rd_data_1 - FIFO 資料輸出 Q
+ad_connect tx_upack/fifo_rd_en ila_rf_debug/probe12
+ad_connect tx_upack/fifo_rd_underflow ila_rf_debug/probe13
+ad_connect tx_upack/fifo_rd_data_0 ila_rf_debug/probe14
+ad_connect tx_upack/fifo_rd_data_1 ila_rf_debug/probe15
+
+# AXI Stream 握手信號 (Stage 3+ Debug)
+# probe16: DMA m_axis_valid - DMA 輸出有效
+# probe17: tx_upack s_axis_ready - FIFO 接收準備好
+# probe18: tx_upack enable_0 - 通道 0 啟用 (from FIR)
+# probe19: tx_upack enable_1 - 通道 1 啟用 (from FIR)
+ad_connect axi_ad9361_dac_dma/m_axis_valid ila_rf_debug/probe16
+ad_connect tx_upack/s_axis_ready ila_rf_debug/probe17
+ad_connect tx_fir_interpolator/enable_out_0 ila_rf_debug/probe18
+ad_connect tx_fir_interpolator/enable_out_1 ila_rf_debug/probe19
+
+# DMA/Reset Debug (Stage 3+ Extended)
+# probe20: tx_upack reset - 檢查是否被 TDD 卡住
+# probe21: TDD channel 2 輸出 - 控制 tx_upack reset
+# probe22: DMA m_axis_last - 突發結束指示
+# probe23: AD9361 rst - 系統復位狀態
+ad_connect tx_upack/reset ila_rf_debug/probe20
+ad_connect axi_tdd_0/tdd_channel_2 ila_rf_debug/probe21
+ad_connect axi_ad9361_dac_dma/m_axis_last ila_rf_debug/probe22
+ad_connect axi_ad9361/rst ila_rf_debug/probe23
+
+# DMA 內部狀態 (Stage 3++ Deep Debug)
+# probe24: DMA m_axis_xfer_req - 傳輸活動中 (= active in dest_axi_stream)
+# probe25: tx_upack s_axis_data[15:0] - AXI Stream 資料低16位
+ad_connect axi_ad9361_dac_dma/m_axis_xfer_req ila_rf_debug/probe24
+
+# 需要 slice 來取 s_axis 的低16位
+ad_ip_instance xlslice dma_data_slice
+ad_ip_parameter dma_data_slice CONFIG.DIN_WIDTH 64
+ad_ip_parameter dma_data_slice CONFIG.DIN_FROM 15
+ad_ip_parameter dma_data_slice CONFIG.DIN_TO 0
+ad_connect axi_ad9361_dac_dma/m_axis_data dma_data_slice/Din
+ad_connect dma_data_slice/Dout ila_rf_debug/probe25
+
+puts "ILA added: 26 probes, 4096 depth, l_clk (Stage 3++ Deep Debug)"
 
