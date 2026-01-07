@@ -252,11 +252,57 @@ ad_connect axi_ad9361/adc_data_i1 cpack/fifo_wr_data_2
 ad_connect axi_ad9361/adc_enable_q1 cpack/enable_3
 ad_connect axi_ad9361/adc_data_q1 cpack/fifo_wr_data_3
 
+# =============================================================================
+# RX Passthrough Module - 階段二
+# =============================================================================
+# 插入點: rx_fir_decimator -> [rx_passthrough] -> cpack
+
+# 載入 passthrough 模組源碼
+# 計算專案根目錄 (從 hdl/projects/ant 往上到 antsdr-fw-patch)
+set script_dir [file dirname [file normalize [info script]]]
+set hdl_root [file dirname [file dirname $script_dir]]
+set fw_root [file dirname $hdl_root]
+set patch_root [file dirname $fw_root]
+set passthrough_src "$patch_root/custom_src/hdl/passthrough/passthrough.v"
+
+puts "Script dir: $script_dir"
+puts "Passthrough src: $passthrough_src"
+
+if {[file exists $passthrough_src]} {
+    puts "Loading passthrough module..."
+    add_files -norecurse $passthrough_src
+    update_compile_order -fileset sources_1
+} else {
+    puts "ERROR: passthrough.v not found at $passthrough_src"
+    error "Passthrough module not found"
+}
+
+# 創建 RX Passthrough 實例
+create_bd_cell -type module -reference passthrough rx_passthrough
+
+# 時脈和復位
+ad_connect axi_ad9361/l_clk rx_passthrough/clk
+ad_connect axi_ad9361/rst rx_passthrough/rst
+
+# rx_fir_decimator -> rx_passthrough (數據)
+ad_connect rx_fir_decimator/data_out_0 rx_passthrough/data_in_i
+ad_connect rx_fir_decimator/data_out_1 rx_passthrough/data_in_q
+
+# rx_passthrough -> cpack (數據)
+ad_connect rx_passthrough/data_out_i cpack/fifo_wr_data_0
+ad_connect rx_passthrough/data_out_q cpack/fifo_wr_data_1
+
+# enable/valid 信號保持原始連接 (FIR -> cpack)
 ad_connect cpack/enable_0 rx_fir_decimator/enable_out_0
 ad_connect cpack/enable_1 rx_fir_decimator/enable_out_1
-ad_connect cpack/fifo_wr_data_0 rx_fir_decimator/data_out_0
-ad_connect cpack/fifo_wr_data_1 rx_fir_decimator/data_out_1
 ad_connect rx_fir_decimator/valid_out_0 cpack/fifo_wr_en
+
+# passthrough 控制輸入接常數 (目前不使用)
+ad_connect VCC rx_passthrough/valid_in
+ad_connect VCC rx_passthrough/enable_in_i
+ad_connect VCC rx_passthrough/enable_in_q
+
+puts "RX Passthrough inserted: rx_fir_decimator -> rx_passthrough -> cpack"
 
 ad_connect axi_ad9361_adc_dma/fifo_wr cpack/packed_fifo_wr
 ad_connect axi_ad9361/up_adc_gpio_out decim_slice/Din
@@ -273,10 +319,37 @@ ad_connect axi_ad9361/dac_data_q0 tx_fir_interpolator/data_out_1
 
 ad_connect  axi_ad9361/l_clk tx_upack/clk
 
-ad_connect  tx_upack/fifo_rd_data_0  tx_fir_interpolator/data_in_0
-ad_connect  tx_upack/enable_0  tx_fir_interpolator/enable_out_0
-ad_connect  tx_upack/fifo_rd_data_1  tx_fir_interpolator/data_in_1
-ad_connect  tx_upack/enable_1  tx_fir_interpolator/enable_out_1
+# =============================================================================
+# TX Passthrough Module - 階段二
+# =============================================================================
+# 插入點: tx_upack -> [tx_passthrough] -> tx_fir_interpolator
+# 注意: 只攔截數據路徑，enable 信號保持原始連接
+
+# 創建 TX Passthrough 實例
+create_bd_cell -type module -reference passthrough tx_passthrough
+
+# 時脈和復位
+ad_connect axi_ad9361/l_clk tx_passthrough/clk
+ad_connect axi_ad9361/rst tx_passthrough/rst
+
+# tx_upack -> tx_passthrough (數據)
+ad_connect tx_upack/fifo_rd_data_0 tx_passthrough/data_in_i
+ad_connect tx_upack/fifo_rd_data_1 tx_passthrough/data_in_q
+
+# tx_passthrough -> tx_fir_interpolator (數據)
+ad_connect tx_passthrough/data_out_i tx_fir_interpolator/data_in_0
+ad_connect tx_passthrough/data_out_q tx_fir_interpolator/data_in_1
+
+# enable 信號保持原始連接 (FIR -> upack)
+ad_connect tx_upack/enable_0 tx_fir_interpolator/enable_out_0
+ad_connect tx_upack/enable_1 tx_fir_interpolator/enable_out_1
+
+# passthrough 控制輸入接常數 (目前不使用)
+ad_connect VCC tx_passthrough/valid_in
+ad_connect VCC tx_passthrough/enable_in_i
+ad_connect VCC tx_passthrough/enable_in_q
+
+puts "TX Passthrough inserted: tx_upack -> tx_passthrough -> tx_fir_interpolator"
 
 ad_connect axi_ad9361/dac_enable_i1 tx_upack/enable_2
 ad_connect axi_ad9361/dac_data_i1 tx_upack/fifo_rd_data_2
@@ -408,21 +481,31 @@ ad_ip_parameter ila_rf_debug CONFIG.C_PROBE9_WIDTH 1
 # 時脈 - l_clk (從 AD9361)
 ad_connect axi_ad9361/l_clk ila_rf_debug/clk
 
-# TX 路徑
-ad_connect tx_upack/fifo_rd_data_0 ila_rf_debug/probe0
-ad_connect tx_upack/fifo_rd_data_1 ila_rf_debug/probe1
+# TX 路徑 (監控 passthrough)
+# probe0: TX passthrough I (from upack)
+# probe1: TX passthrough Q (from upack)
+# probe2: TX FIR out I
+# probe3: TX FIR out Q
+ad_connect tx_passthrough/probe_i ila_rf_debug/probe0
+ad_connect tx_passthrough/probe_q ila_rf_debug/probe1
 ad_connect tx_fir_interpolator/data_out_0 ila_rf_debug/probe2
 ad_connect tx_fir_interpolator/data_out_1 ila_rf_debug/probe3
 
-# RX 路徑
+# RX 路徑 (監控 passthrough)
+# probe4: RX ADC I (raw)
+# probe5: RX ADC Q (raw)
+# probe6: RX passthrough I (from FIR)
+# probe7: RX passthrough Q (from FIR)
 ad_connect axi_ad9361/adc_data_i0 ila_rf_debug/probe4
 ad_connect axi_ad9361/adc_data_q0 ila_rf_debug/probe5
-ad_connect rx_fir_decimator/data_out_0 ila_rf_debug/probe6
-ad_connect rx_fir_decimator/data_out_1 ila_rf_debug/probe7
+ad_connect rx_passthrough/probe_i ila_rf_debug/probe6
+ad_connect rx_passthrough/probe_q ila_rf_debug/probe7
 
 # 控制信號
-ad_connect tx_fir_interpolator/valid_out_0 ila_rf_debug/probe8
-ad_connect rx_fir_decimator/valid_out_0 ila_rf_debug/probe9
+# probe8: TX passthrough valid
+# probe9: RX passthrough valid
+ad_connect tx_passthrough/probe_valid ila_rf_debug/probe8
+ad_connect rx_passthrough/probe_valid ila_rf_debug/probe9
 
 puts "ILA added: 10 probes, 4096 depth, l_clk"
 
