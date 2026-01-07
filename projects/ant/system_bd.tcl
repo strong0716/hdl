@@ -257,17 +257,20 @@ ad_connect axi_ad9361/adc_data_q1 cpack/fifo_wr_data_3
 # =============================================================================
 # 插入點: rx_fir_decimator -> [rx_passthrough] -> cpack
 
-# 載入 passthrough 模組源碼
+# 載入自訂模組源碼
 # 計算專案根目錄 (從 hdl/projects/ant 往上到 antsdr-fw-patch)
 set script_dir [file dirname [file normalize [info script]]]
 set hdl_root [file dirname [file dirname $script_dir]]
 set fw_root [file dirname $hdl_root]
 set patch_root [file dirname $fw_root]
 set passthrough_src "$patch_root/custom_src/hdl/passthrough/passthrough.v"
+set bpsk_mod_src "$patch_root/custom_src/hdl/bpsk_modulator/bpsk_modulator.v"
 
 puts "Script dir: $script_dir"
 puts "Passthrough src: $passthrough_src"
+puts "BPSK modulator src: $bpsk_mod_src"
 
+# 載入 passthrough 模組 (RX 路徑使用)
 if {[file exists $passthrough_src]} {
     puts "Loading passthrough module..."
     add_files -norecurse $passthrough_src
@@ -275,6 +278,16 @@ if {[file exists $passthrough_src]} {
 } else {
     puts "ERROR: passthrough.v not found at $passthrough_src"
     error "Passthrough module not found"
+}
+
+# 載入 BPSK modulator 模組 (TX 路徑使用)
+if {[file exists $bpsk_mod_src]} {
+    puts "Loading BPSK modulator module..."
+    add_files -norecurse $bpsk_mod_src
+    update_compile_order -fileset sources_1
+} else {
+    puts "ERROR: bpsk_modulator.v not found at $bpsk_mod_src"
+    error "BPSK modulator module not found"
 }
 
 # 創建 RX Passthrough 實例
@@ -320,36 +333,37 @@ ad_connect axi_ad9361/dac_data_q0 tx_fir_interpolator/data_out_1
 ad_connect  axi_ad9361/l_clk tx_upack/clk
 
 # =============================================================================
-# TX Passthrough Module - 階段二
+# TX BPSK Modulator - 階段三
 # =============================================================================
-# 插入點: tx_upack -> [tx_passthrough] -> tx_fir_interpolator
+# 插入點: tx_upack -> [bpsk_modulator] -> tx_fir_interpolator
+# 功能: 將 DMA packed bits 轉換為 BPSK 星座點
 # 注意: 只攔截數據路徑，enable 信號保持原始連接
 
-# 創建 TX Passthrough 實例
-create_bd_cell -type module -reference passthrough tx_passthrough
+# 創建 BPSK Modulator 實例
+create_bd_cell -type module -reference bpsk_modulator tx_bpsk_mod
 
 # 時脈和復位
-ad_connect axi_ad9361/l_clk tx_passthrough/clk
-ad_connect axi_ad9361/rst tx_passthrough/rst
+ad_connect axi_ad9361/l_clk tx_bpsk_mod/clk
+ad_connect axi_ad9361/rst tx_bpsk_mod/rst
 
-# tx_upack -> tx_passthrough (數據)
-ad_connect tx_upack/fifo_rd_data_0 tx_passthrough/data_in_i
-ad_connect tx_upack/fifo_rd_data_1 tx_passthrough/data_in_q
+# tx_upack -> bpsk_modulator (數據)
+ad_connect tx_upack/fifo_rd_data_0 tx_bpsk_mod/data_in_i
+ad_connect tx_upack/fifo_rd_data_1 tx_bpsk_mod/data_in_q
 
-# tx_passthrough -> tx_fir_interpolator (數據)
-ad_connect tx_passthrough/data_out_i tx_fir_interpolator/data_in_0
-ad_connect tx_passthrough/data_out_q tx_fir_interpolator/data_in_1
+# bpsk_modulator -> tx_fir_interpolator (數據)
+ad_connect tx_bpsk_mod/data_out_i tx_fir_interpolator/data_in_0
+ad_connect tx_bpsk_mod/data_out_q tx_fir_interpolator/data_in_1
 
 # enable 信號保持原始連接 (FIR -> upack)
 ad_connect tx_upack/enable_0 tx_fir_interpolator/enable_out_0
 ad_connect tx_upack/enable_1 tx_fir_interpolator/enable_out_1
 
-# passthrough 控制輸入接常數 (目前不使用)
-ad_connect VCC tx_passthrough/valid_in
-ad_connect VCC tx_passthrough/enable_in_i
-ad_connect VCC tx_passthrough/enable_in_q
+# bpsk_modulator 控制輸入 - 連接 FIR valid 信號
+ad_connect tx_fir_interpolator/valid_out_0 tx_bpsk_mod/valid_in
+ad_connect VCC tx_bpsk_mod/enable_in_i
+ad_connect VCC tx_bpsk_mod/enable_in_q
 
-puts "TX Passthrough inserted: tx_upack -> tx_passthrough -> tx_fir_interpolator"
+puts "TX BPSK Modulator inserted: tx_upack -> tx_bpsk_mod -> tx_fir_interpolator"
 
 ad_connect axi_ad9361/dac_enable_i1 tx_upack/enable_2
 ad_connect axi_ad9361/dac_data_i1 tx_upack/fifo_rd_data_2
@@ -449,7 +463,7 @@ ad_cpu_interrupt ps-13 mb-13 axi_ad9361_adc_dma/irq
 ad_cpu_interrupt ps-12 mb-12 axi_ad9361_dac_dma/irq
 
 # =============================================================================
-# ILA Debug Core - 階段一：觀察官方數據流
+# ILA Debug Core - 階段三：觀察 BPSK 調變器輸出
 # =============================================================================
 
 puts "Adding ILA Debug Core..."
@@ -460,7 +474,7 @@ puts "Adding ILA Debug Core..."
 
 ad_ip_instance ila ila_rf_debug
 ad_ip_parameter ila_rf_debug CONFIG.C_MONITOR_TYPE Native
-ad_ip_parameter ila_rf_debug CONFIG.C_NUM_OF_PROBES 10
+ad_ip_parameter ila_rf_debug CONFIG.C_NUM_OF_PROBES 12
 ad_ip_parameter ila_rf_debug CONFIG.C_DATA_DEPTH 4096
 ad_ip_parameter ila_rf_debug CONFIG.C_EN_STRG_QUAL 1
 ad_ip_parameter ila_rf_debug CONFIG.C_ADV_TRIGGER true
@@ -477,17 +491,19 @@ ad_ip_parameter ila_rf_debug CONFIG.C_PROBE6_WIDTH 16
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE7_WIDTH 16
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE8_WIDTH 1
 ad_ip_parameter ila_rf_debug CONFIG.C_PROBE9_WIDTH 1
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE10_WIDTH 4
+ad_ip_parameter ila_rf_debug CONFIG.C_PROBE11_WIDTH 1
 
 # 時脈 - l_clk (從 AD9361)
 ad_connect axi_ad9361/l_clk ila_rf_debug/clk
 
-# TX 路徑 (監控 passthrough)
-# probe0: TX passthrough I (from upack)
-# probe1: TX passthrough Q (from upack)
+# TX 路徑 (監控 BPSK modulator)
+# probe0: BPSK modulator 輸出 I (星座點)
+# probe1: BPSK modulator 輸出 Q (應為 0)
 # probe2: TX FIR out I
 # probe3: TX FIR out Q
-ad_connect tx_passthrough/probe_i ila_rf_debug/probe0
-ad_connect tx_passthrough/probe_q ila_rf_debug/probe1
+ad_connect tx_bpsk_mod/probe_i ila_rf_debug/probe0
+ad_connect tx_bpsk_mod/probe_q ila_rf_debug/probe1
 ad_connect tx_fir_interpolator/data_out_0 ila_rf_debug/probe2
 ad_connect tx_fir_interpolator/data_out_1 ila_rf_debug/probe3
 
@@ -502,10 +518,16 @@ ad_connect rx_passthrough/probe_i ila_rf_debug/probe6
 ad_connect rx_passthrough/probe_q ila_rf_debug/probe7
 
 # 控制信號
-# probe8: TX passthrough valid
+# probe8: BPSK modulator valid
 # probe9: RX passthrough valid
-ad_connect tx_passthrough/probe_valid ila_rf_debug/probe8
+ad_connect tx_bpsk_mod/probe_valid ila_rf_debug/probe8
 ad_connect rx_passthrough/probe_valid ila_rf_debug/probe9
 
-puts "ILA added: 10 probes, 4096 depth, l_clk"
+# BPSK 調變器狀態
+# probe10: bit_cnt (當前位元位置 0-15)
+# probe11: current_bit (當前調變位元)
+ad_connect tx_bpsk_mod/probe_bit_cnt ila_rf_debug/probe10
+ad_connect tx_bpsk_mod/probe_current_bit ila_rf_debug/probe11
+
+puts "ILA added: 12 probes, 4096 depth, l_clk (Stage 3 BPSK)"
 
